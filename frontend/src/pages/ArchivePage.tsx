@@ -1,41 +1,50 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
-  Box, Card, CardContent, Grid, Typography, Stack, Avatar, Chip, TextField,
-  InputAdornment, MenuItem, AvatarGroup, Button, Divider, Tooltip,
+  Box, Card, CardContent, Grid, Typography, Stack, Chip, TextField,
+  InputAdornment, MenuItem, Button, Divider,
 } from '@mui/material'
 import SearchIcon from '@mui/icons-material/Search'
 import EventIcon from '@mui/icons-material/Event'
 import ScheduleIcon from '@mui/icons-material/Schedule'
-import DownloadIcon from '@mui/icons-material/Download'
+import OpenInNewIcon from '@mui/icons-material/OpenInNew'
 import PdfIcon from '@mui/icons-material/PictureAsPdf'
+import InventoryIcon from '@mui/icons-material/Inventory2'
 import PageHeader from '../components/PageHeader'
-import { useMeeting } from '../store/MeetingContext'
-import { formatDate, formatDuration, initials } from '../utils/format'
-import { exportPDF } from '../utils/export'
-import type { Meeting } from '../types'
+import { Loading, ErrorState, EmptyState } from '../components/QueryState'
+import { useMeetings } from '../hooks/queries'
+import { useActiveMeeting } from '../store/ActiveMeetingContext'
+import { downloadExport } from '../api/endpoints'
+import { apiErrorMessage } from '../api/client'
+import { platformLabels, recordingStateLabels, type MeetingPlatform } from '../api/types'
+import { formatDate, formatDuration } from '../utils/format'
 
 export default function ArchivePage() {
-  const { meeting, archive } = useMeeting()
-  const all = useMemo<Meeting[]>(() => [meeting, ...archive], [meeting, archive])
-
+  const navigate = useNavigate()
+  const meetingsQuery = useMeetings(100, 0)
+  const { activeMeetingId, setActiveMeetingId } = useActiveMeeting()
   const [query, setQuery] = useState('')
-  const [platform, setPlatform] = useState('all')
+  const [platform, setPlatform] = useState<string>('all')
 
+  if (meetingsQuery.isLoading) return <Loading />
+  if (meetingsQuery.isError) {
+    return <ErrorState message={apiErrorMessage(meetingsQuery.error)} onRetry={() => meetingsQuery.refetch()} />
+  }
+
+  const all = meetingsQuery.data?.items ?? []
   const filtered = all.filter((m) => {
-    const matchQuery =
-      !query ||
+    const matchQuery = !query ||
       m.title.toLowerCase().includes(query.toLowerCase()) ||
-      m.department.toLowerCase().includes(query.toLowerCase())
+      (m.department ?? '').toLowerCase().includes(query.toLowerCase())
     const matchPlatform = platform === 'all' || m.platform === platform
     return matchQuery && matchPlatform
   })
 
+  const open = (id: string, to: string) => { setActiveMeetingId(id); navigate(to) }
+
   return (
     <Box>
-      <PageHeader
-        title="Архив совещаний"
-        subtitle="Хранилище записей, транскриптов и поручений прошедших совещаний"
-      />
+      <PageHeader title="Архив совещаний" subtitle="Хранилище записей, транскриптов и поручений" />
 
       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ mb: 2.5 }}>
         <TextField
@@ -43,87 +52,61 @@ export default function ArchivePage() {
           value={query} onChange={(e) => setQuery(e.target.value)} sx={{ flex: 1 }}
           InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> }}
         />
-        <TextField
-          select size="small" label="Платформа" value={platform}
-          onChange={(e) => setPlatform(e.target.value)} sx={{ minWidth: 200 }}
-        >
+        <TextField select size="small" label="Платформа" value={platform} onChange={(e) => setPlatform(e.target.value as MeetingPlatform | 'all')} sx={{ minWidth: 200 }}>
           <MenuItem value="all">Все платформы</MenuItem>
-          <MenuItem value="Cisco Jabber">Cisco Jabber</MenuItem>
-          <MenuItem value="Яндекс Телемост">Яндекс Телемост</MenuItem>
+          <MenuItem value="cisco_jabber">Cisco Jabber</MenuItem>
+          <MenuItem value="yandex_telemost">Яндекс Телемост</MenuItem>
         </TextField>
       </Stack>
 
-      <Grid container spacing={2.5}>
-        {filtered.map((m) => {
-          const sent = m.assignments.filter((a) => a.status === 'sent').length
-          return (
+      {filtered.length === 0 ? (
+        <Card><CardContent>
+          <EmptyState icon={<InventoryIcon sx={{ fontSize: 40, color: 'text.disabled' }} />} title="Совещания не найдены." />
+        </CardContent></Card>
+      ) : (
+        <Grid container spacing={2.5}>
+          {filtered.map((m) => (
             <Grid item xs={12} md={6} key={m.id}>
-              <Card sx={{ height: '100%' }}>
+              <Card sx={{ height: '100%', outline: m.id === activeMeetingId ? '2px solid' : 'none', outlineColor: 'primary.main' }}>
                 <CardContent>
                   <Stack direction="row" justifyContent="space-between" alignItems="flex-start" sx={{ mb: 1 }}>
-                    <Chip size="small" label={m.platform} color="secondary" variant="outlined" />
-                    {m.id === meeting.id && <Chip size="small" label="Текущее" color="primary" />}
+                    <Chip size="small" label={platformLabels[m.platform]} color="secondary" variant="outlined" />
+                    <Chip size="small" label={recordingStateLabels[m.recording_state]} color={m.recording_state === 'done' ? 'success' : 'default'} />
                   </Stack>
                   <Typography variant="h6" sx={{ mb: 0.5, fontSize: 17 }}>{m.title}</Typography>
-                  <Typography color="text.secondary" sx={{ fontSize: 13, mb: 1.5 }}>{m.department}</Typography>
+                  <Typography color="text.secondary" sx={{ fontSize: 13, mb: 1.5 }}>{m.department ?? '—'}</Typography>
 
                   <Stack direction="row" spacing={2} sx={{ mb: 2, color: 'text.secondary' }}>
                     <Stack direction="row" spacing={0.5} alignItems="center">
                       <EventIcon sx={{ fontSize: 16 }} />
-                      <Typography sx={{ fontSize: 13 }}>{formatDate(m.date)}</Typography>
+                      <Typography sx={{ fontSize: 13 }}>{m.scheduled_at ? formatDate(m.scheduled_at) : '—'}</Typography>
                     </Stack>
                     <Stack direction="row" spacing={0.5} alignItems="center">
                       <ScheduleIcon sx={{ fontSize: 16 }} />
-                      <Typography sx={{ fontSize: 13 }}>{formatDuration(m.durationSec)}</Typography>
+                      <Typography sx={{ fontSize: 13 }}>{formatDuration(m.duration_sec)}</Typography>
                     </Stack>
                   </Stack>
 
                   <Divider sx={{ mb: 1.5 }} />
 
-                  <Stack direction="row" justifyContent="space-between" alignItems="center">
-                    <Box>
-                      <Typography sx={{ fontSize: 12.5, color: 'text.secondary' }}>Участники</Typography>
-                      <AvatarGroup max={4} sx={{ mt: 0.5, justifyContent: 'flex-start', '& .MuiAvatar-root': { width: 30, height: 30, fontSize: 12 } }}>
-                        {m.participants.map((p) => (
-                          <Tooltip key={p.id} title={p.name}>
-                            <Avatar sx={{ bgcolor: p.speakerColor }}>{initials(p.name)}</Avatar>
-                          </Tooltip>
-                        ))}
-                      </AvatarGroup>
-                    </Box>
-                    <Box sx={{ textAlign: 'right' }}>
-                      <Typography sx={{ fontSize: 12.5, color: 'text.secondary' }}>Поручения</Typography>
-                      <Typography sx={{ fontWeight: 700, fontSize: 20 }}>
-                        {m.assignments.length}
-                        <Box component="span" sx={{ fontSize: 12, fontWeight: 400, color: 'success.main', ml: 0.5 }}>
-                          ({sent} отпр.)
-                        </Box>
-                      </Typography>
-                    </Box>
+                  <Stack direction="row" spacing={1}>
+                    <Button size="small" variant="contained" startIcon={<OpenInNewIcon />} onClick={() => open(m.id, '/transcript')}>
+                      Открыть
+                    </Button>
+                    <Button size="small" variant="outlined" onClick={() => open(m.id, '/assignments')}>
+                      Поручения
+                    </Button>
+                    <Box sx={{ flex: 1 }} />
+                    <Button size="small" variant="text" startIcon={<PdfIcon />} onClick={() => downloadExport(m.id, 'pdf')}>
+                      PDF
+                    </Button>
                   </Stack>
-
-                  <Button
-                    fullWidth variant="outlined" size="small" sx={{ mt: 2 }}
-                    startIcon={<PdfIcon />} onClick={() => exportPDF(m)}
-                  >
-                    Протокол (PDF)
-                  </Button>
                 </CardContent>
               </Card>
             </Grid>
-          )
-        })}
-        {filtered.length === 0 && (
-          <Grid item xs={12}>
-            <Card><CardContent>
-              <Stack alignItems="center" spacing={1.5} sx={{ py: 5 }}>
-                <DownloadIcon sx={{ fontSize: 40, color: 'text.disabled' }} />
-                <Typography color="text.secondary">Совещания не найдены.</Typography>
-              </Stack>
-            </CardContent></Card>
-          </Grid>
-        )}
-      </Grid>
+          ))}
+        </Grid>
+      )}
     </Box>
   )
 }

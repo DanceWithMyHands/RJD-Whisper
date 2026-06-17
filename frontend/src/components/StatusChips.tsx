@@ -1,5 +1,5 @@
 import { Chip } from '@mui/material'
-import type { TaskStatus, TaskPriority } from '../types'
+import type { TaskStatus, TaskPriority } from '../api/types'
 
 export function StatusChip({ status }: { status: TaskStatus }) {
   const map: Record<TaskStatus, { label: string; color: 'default' | 'warning' | 'success' | 'info' }> = {

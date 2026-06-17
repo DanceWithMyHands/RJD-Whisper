@@ -5,34 +5,51 @@ import {
 } from '@mui/material'
 import { DatePicker } from '@mui/x-date-pickers/DatePicker'
 import dayjs from 'dayjs'
-import type { Assignment, Participant, TaskPriority } from '../types'
+import type { Assignment, Participant, TaskPriority } from '../api/types'
+
+export interface AssignmentFormValue {
+  title: string
+  description: string | null
+  assignee_id: string | null
+  due_date: string | null
+  priority: TaskPriority
+}
 
 interface Props {
   open: boolean
   assignment: Assignment | null
   participants: Participant[]
+  saving?: boolean
   onClose: () => void
-  onSave: (a: Assignment) => void
+  onSubmit: (value: AssignmentFormValue) => void
 }
 
-const empty = (): Assignment => ({
-  id: `a-${Date.now()}`,
+const empty = (): AssignmentFormValue => ({
   title: '',
   description: '',
-  assigneeId: '',
-  dueDate: dayjs().add(7, 'day').format('YYYY-MM-DD'),
+  assignee_id: null,
+  due_date: dayjs().add(7, 'day').format('YYYY-MM-DD'),
   priority: 'medium',
-  status: 'draft',
 })
 
-export default function EditAssignmentDialog({ open, assignment, participants, onClose, onSave }: Props) {
-  const [draft, setDraft] = useState<Assignment>(empty())
+export default function EditAssignmentDialog({ open, assignment, participants, saving, onClose, onSubmit }: Props) {
+  const [draft, setDraft] = useState<AssignmentFormValue>(empty())
 
   useEffect(() => {
-    setDraft(assignment ? { ...assignment } : empty())
+    if (assignment) {
+      setDraft({
+        title: assignment.title,
+        description: assignment.description,
+        assignee_id: assignment.assignee_id,
+        due_date: assignment.due_date,
+        priority: assignment.priority,
+      })
+    } else {
+      setDraft(empty())
+    }
   }, [assignment, open])
 
-  const valid = draft.title.trim() && draft.assigneeId && draft.dueDate
+  const valid = draft.title.trim().length > 0
 
   return (
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm">
@@ -44,22 +61,23 @@ export default function EditAssignmentDialog({ open, assignment, participants, o
             onChange={(e) => setDraft({ ...draft, title: e.target.value })} autoFocus
           />
           <TextField
-            label="Описание / контекст" fullWidth multiline minRows={3} value={draft.description}
+            label="Описание / контекст" fullWidth multiline minRows={3} value={draft.description ?? ''}
             onChange={(e) => setDraft({ ...draft, description: e.target.value })}
           />
           <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
             <TextField
-              select label="Ответственный" sx={{ flex: '1 1 200px' }} value={draft.assigneeId}
-              onChange={(e) => setDraft({ ...draft, assigneeId: e.target.value })}
+              select label="Ответственный" sx={{ flex: '1 1 200px' }} value={draft.assignee_id ?? ''}
+              onChange={(e) => setDraft({ ...draft, assignee_id: e.target.value || null })}
             >
+              <MenuItem value="">— не назначен —</MenuItem>
               {participants.map((p) => (
-                <MenuItem key={p.id} value={p.id}>{p.name} — {p.role}</MenuItem>
+                <MenuItem key={p.id} value={p.id}>{p.name}{p.role ? ` — ${p.role}` : ''}</MenuItem>
               ))}
             </TextField>
             <DatePicker
               label="Срок исполнения" format="DD.MM.YYYY"
-              value={dayjs(draft.dueDate)}
-              onChange={(v) => v && setDraft({ ...draft, dueDate: v.format('YYYY-MM-DD') })}
+              value={draft.due_date ? dayjs(draft.due_date) : null}
+              onChange={(v) => setDraft({ ...draft, due_date: v ? v.format('YYYY-MM-DD') : null })}
               sx={{ flex: '1 1 160px' }}
             />
           </Box>
@@ -75,7 +93,9 @@ export default function EditAssignmentDialog({ open, assignment, participants, o
       </DialogContent>
       <DialogActions sx={{ px: 3, pb: 2 }}>
         <Button onClick={onClose} color="inherit">Отмена</Button>
-        <Button variant="contained" disabled={!valid} onClick={() => onSave(draft)}>Сохранить</Button>
+        <Button variant="contained" disabled={!valid || saving} onClick={() => onSubmit(draft)}>
+          {saving ? 'Сохранение…' : 'Сохранить'}
+        </Button>
       </DialogActions>
     </Dialog>
   )

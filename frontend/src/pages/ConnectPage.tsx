@@ -3,109 +3,232 @@ import { useNavigate } from 'react-router-dom'
 import {
   Box, Card, CardContent, Grid, Typography, Button, Stack, TextField,
   MenuItem, Stepper, Step, StepLabel, Avatar, List, ListItem, ListItemAvatar,
-  ListItemText, Chip, Alert, Divider, CircularProgress, LinearProgress,
+  ListItemText, Chip, Alert, Divider, IconButton, CircularProgress, Tooltip,
+  Autocomplete,
 } from '@mui/material'
 import VideocamIcon from '@mui/icons-material/Videocam'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import CancelIcon from '@mui/icons-material/Cancel'
 import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty'
-import SmartToyIcon from '@mui/icons-material/SmartToy'
 import PageHeader from '../components/PageHeader'
-import { useMeeting } from '../store/MeetingContext'
+import { Loading } from '../components/QueryState'
+import { useActiveMeeting } from '../store/ActiveMeetingContext'
+import {
+  useMeeting, useCreateMeeting, useConnectBot, useGrantAllConsent, useSetConsent,
+  useUserDirectory,
+} from '../hooks/queries'
+import { apiErrorMessage } from '../api/client'
+import type {
+  ConsentStatus, MeetingDetail, MeetingPlatform, UserDirectoryItem,
+} from '../api/types'
+import { roleLabels } from '../api/types'
 import { initials } from '../utils/format'
-import type { MeetingPlatform } from '../types'
 
-const steps = ['Подключение бота', 'Согласие участников', 'Готов к записи']
+const steps = ['Создание', 'Подключение бота', 'Согласие', 'Готово']
 
 export default function ConnectPage() {
   const navigate = useNavigate()
-  const { meeting, setRecordingState, setConsent, grantAllConsent } = useMeeting()
+  const { activeMeetingId, setActiveMeetingId } = useActiveMeeting()
+  const meetingQuery = useMeeting(activeMeetingId)
+  const meeting = meetingQuery.data
 
-  const [platform, setPlatform] = useState<MeetingPlatform>('Cisco Jabber')
-  const [link, setLink] = useState('https://jabber.rzd.ru/meet/operativka-0608')
-  const [activeStep, setActiveStep] = useState(0)
-  const [connecting, setConnecting] = useState(false)
+  const inWizard = Boolean(
+    meeting && ['idle', 'connecting', 'awaiting_consent', 'failed'].includes(meeting.recording_state),
+  )
 
-  const grantedCount = meeting.participants.filter((p) => p.consent === 'granted').length
-  const allGranted = grantedCount === meeting.participants.length
-  const anyDeclined = meeting.participants.some((p) => p.consent === 'declined')
+  if (activeMeetingId && meetingQuery.isLoading) return <Loading />
 
-  const handleConnect = () => {
-    setConnecting(true)
-    setRecordingState('connecting')
-    setTimeout(() => {
-      setConnecting(false)
-      setActiveStep(1)
-      setRecordingState('awaiting_consent')
-      // По умолчанию запрашиваем согласие — статусы pending
-      meeting.participants.forEach((p) => setConsent(p.id, 'pending'))
-    }, 1400)
-  }
+  return inWizard && meeting ? (
+    <SetupWizard
+      meeting={meeting}
+      onReset={() => setActiveMeetingId(null)}
+      onReady={() => navigate('/recording')}
+    />
+  ) : (
+    <CreateForm onCreated={(id) => setActiveMeetingId(id)} />
+  )
+}
 
-  const handleStartRecording = () => {
-    setRecordingState('recording')
-    navigate('/recording')
+// ---------- Шаг создания ----------
+
+function CreateForm({ onCreated }: { onCreated: (id: string) => void }) {
+  const createMeeting = useCreateMeeting()
+  const directoryQuery = useUserDirectory()
+  const directory = directoryQuery.data ?? []
+
+  const [title, setTitle] = useState('Оперативное совещание дистанции пути')
+  const [platform, setPlatform] = useState<MeetingPlatform>('cisco_jabber')
+  const [url, setUrl] = useState('https://jabber.rzd.ru/meet/operativka')
+  const [department, setDepartment] = useState('Дистанция пути Москва-Сортировочная')
+  const [organizer, setOrganizer] = useState('Соколов Андрей Петрович')
+  const [selected, setSelected] = useState<UserDirectoryItem[]>([])
+  const [error, setError] = useState<string | null>(null)
+
+  const valid = title.trim() && selected.length > 0
+
+  const submit = async () => {
+    setError(null)
+    try {
+      const created = await createMeeting.mutateAsync({
+        title,
+        platform,
+        conference_url: url || null,
+        department: department || null,
+        organizer_name: organizer || null,
+        participant_ids: selected.map((u) => u.id),
+      })
+      onCreated(created.id)
+    } catch (err) {
+      setError(apiErrorMessage(err))
+    }
   }
 
   return (
     <Box>
       <PageHeader
-        title="Подключение бота к видеоконференции"
-        subtitle="Бот-участник подключается к встрече и запрашивает согласие на запись у всех участников"
+        title="Новое совещание"
+        subtitle="Выберите участников из справочника пользователей и подключите бота для записи"
       />
-
-      <Stepper activeStep={activeStep} sx={{ mb: 3 }} alternativeLabel>
-        {steps.map((s) => (
-          <Step key={s}><StepLabel>{s}</StepLabel></Step>
-        ))}
+      <Stepper activeStep={0} sx={{ mb: 3 }} alternativeLabel>
+        {steps.map((s) => <Step key={s}><StepLabel>{s}</StepLabel></Step>)}
       </Stepper>
 
       <Grid container spacing={2.5}>
         <Grid item xs={12} md={5}>
           <Card>
             <CardContent>
-              <Stack direction="row" spacing={1.5} alignItems="center" sx={{ mb: 2 }}>
-                <Avatar sx={{ bgcolor: 'secondary.main' }}><SmartToyIcon /></Avatar>
-                <Box>
-                  <Typography variant="h6">Параметры подключения</Typography>
-                  <Typography color="text.secondary" sx={{ fontSize: 13 }}>Бот «РЖД-Протокол»</Typography>
-                </Box>
+              <Typography variant="h6" sx={{ mb: 2 }}>Параметры</Typography>
+              <Stack spacing={2}>
+                <TextField label="Название совещания" fullWidth value={title} onChange={(e) => setTitle(e.target.value)} />
+                <TextField select label="Платформа" fullWidth value={platform} onChange={(e) => setPlatform(e.target.value as MeetingPlatform)}>
+                  <MenuItem value="cisco_jabber">Cisco Jabber</MenuItem>
+                  <MenuItem value="yandex_telemost">Яндекс Телемост</MenuItem>
+                </TextField>
+                <TextField label="Ссылка на конференцию" fullWidth value={url} onChange={(e) => setUrl(e.target.value)} />
+                <TextField label="Подразделение" fullWidth value={department} onChange={(e) => setDepartment(e.target.value)} />
+                <TextField label="Организатор" fullWidth value={organizer} onChange={(e) => setOrganizer(e.target.value)} />
               </Stack>
+            </CardContent>
+          </Card>
+        </Grid>
 
-              <TextField
-                select fullWidth label="Платформа" value={platform}
-                onChange={(e) => setPlatform(e.target.value as MeetingPlatform)}
-                sx={{ mb: 2 }} disabled={activeStep > 0}
+        <Grid item xs={12} md={7}>
+          <Card>
+            <CardContent>
+              <Typography variant="h6" sx={{ mb: 0.5 }}>Участники</Typography>
+              <Typography color="text.secondary" sx={{ fontSize: 13, mb: 2 }}>
+                Добавить можно только пользователей из базы. Нет нужного человека — заведите его на экране «Пользователи».
+              </Typography>
+
+              <Autocomplete
+                multiple
+                options={directory}
+                loading={directoryQuery.isLoading}
+                value={selected}
+                onChange={(_, v) => setSelected(v)}
+                getOptionLabel={(o) => o.full_name}
+                isOptionEqualToValue={(a, b) => a.id === b.id}
+                renderOption={(props, option) => (
+                  <Box component="li" {...props} key={option.id}>
+                    <Avatar sx={{ width: 28, height: 28, fontSize: 12, mr: 1.5, bgcolor: 'secondary.main' }}>
+                      {initials(option.full_name)}
+                    </Avatar>
+                    <Box>
+                      <Typography sx={{ fontSize: 14 }}>{option.full_name}</Typography>
+                      <Typography sx={{ fontSize: 12, color: 'text.secondary' }}>
+                        {[option.position, roleLabels[option.role]].filter(Boolean).join(' · ')}
+                      </Typography>
+                    </Box>
+                  </Box>
+                )}
+                renderTags={(value, getTagProps) =>
+                  value.map((option, index) => (
+                    <Chip
+                      {...getTagProps({ index })}
+                      key={option.id}
+                      avatar={<Avatar>{initials(option.full_name)}</Avatar>}
+                      label={option.full_name}
+                    />
+                  ))
+                }
+                renderInput={(params) => (
+                  <TextField {...params} label="Выберите участников" placeholder="Поиск по ФИО…" />
+                )}
+              />
+
+              {directory.length === 0 && !directoryQuery.isLoading && (
+                <Alert severity="info" sx={{ mt: 2 }}>
+                  В справочнике нет пользователей. Заведите их на экране «Пользователи».
+                </Alert>
+              )}
+              {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
+
+              <Button
+                sx={{ mt: 2.5 }} variant="contained" size="large" disabled={!valid || createMeeting.isPending}
+                startIcon={createMeeting.isPending ? <CircularProgress size={18} color="inherit" /> : <VideocamIcon />}
+                onClick={submit}
               >
-                <MenuItem value="Cisco Jabber">Cisco Jabber</MenuItem>
-                <MenuItem value="Яндекс Телемост">Яндекс Телемост</MenuItem>
-              </TextField>
+                {createMeeting.isPending ? 'Создание…' : `Создать совещание (${selected.length})`}
+              </Button>
+            </CardContent>
+          </Card>
+        </Grid>
+      </Grid>
+    </Box>
+  )
+}
 
-              <TextField
-                fullWidth label="Ссылка на конференцию" value={link}
-                onChange={(e) => setLink(e.target.value)} sx={{ mb: 2 }} disabled={activeStep > 0}
-              />
+// ---------- Шаги бота и согласия ----------
 
-              <TextField
-                fullWidth label="Название совещания" defaultValue={meeting.title}
-                sx={{ mb: 2 }} disabled={activeStep > 0}
-              />
+function SetupWizard({ meeting, onReset, onReady }: { meeting: MeetingDetail; onReset: () => void; onReady: () => void }) {
+  const connectBot = useConnectBot(meeting.id)
+  const grantAll = useGrantAllConsent(meeting.id)
+  const setConsent = useSetConsent(meeting.id)
+  const [error, setError] = useState<string | null>(null)
 
-              {activeStep === 0 && (
+  const grantedCount = meeting.participants.filter((p) => p.consent === 'granted').length
+  const allGranted = meeting.participants.length > 0 && grantedCount === meeting.participants.length
+  const anyDeclined = meeting.participants.some((p) => p.consent === 'declined')
+  const botConnected = meeting.recording_state === 'awaiting_consent'
+  const activeStep = !botConnected ? 1 : allGranted ? 3 : 2
+
+  const run = async (fn: () => Promise<unknown>) => {
+    setError(null)
+    try { await fn() } catch (err) { setError(apiErrorMessage(err)) }
+  }
+
+  return (
+    <Box>
+      <PageHeader
+        title="Подключение бота и согласие"
+        subtitle={meeting.title}
+        action={<Button variant="text" color="inherit" onClick={onReset}>Создать другое</Button>}
+      />
+      <Stepper activeStep={activeStep} sx={{ mb: 3 }} alternativeLabel>
+        {steps.map((s) => <Step key={s}><StepLabel>{s}</StepLabel></Step>)}
+      </Stepper>
+
+      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+
+      <Grid container spacing={2.5}>
+        <Grid item xs={12} md={5}>
+          <Card>
+            <CardContent>
+              <Typography variant="h6" sx={{ mb: 1 }}>Бот-участник</Typography>
+              <Typography color="text.secondary" sx={{ fontSize: 13.5, mb: 2 }}>
+                Бот подключается к конференции и запрашивает согласие участников на запись.
+              </Typography>
+              {!botConnected ? (
                 <Button
                   fullWidth variant="contained" size="large"
-                  startIcon={connecting ? <CircularProgress size={18} color="inherit" /> : <VideocamIcon />}
-                  disabled={connecting || !link}
-                  onClick={handleConnect}
+                  startIcon={connectBot.isPending ? <CircularProgress size={18} color="inherit" /> : <VideocamIcon />}
+                  disabled={connectBot.isPending}
+                  onClick={() => run(() => connectBot.mutateAsync())}
                 >
-                  {connecting ? 'Подключение бота…' : 'Подключить бота'}
+                  {connectBot.isPending ? 'Подключение…' : 'Подключить бота'}
                 </Button>
-              )}
-
-              {activeStep >= 1 && (
-                <Alert severity="success" icon={<CheckCircleIcon />}>
-                  Бот подключён к конференции «{platform}»
-                </Alert>
+              ) : (
+                <Alert severity="success" icon={<CheckCircleIcon />}>Бот подключён к конференции</Alert>
               )}
             </CardContent>
           </Card>
@@ -118,18 +241,12 @@ export default function ConnectPage() {
                 <Typography variant="h6">Согласие на запись</Typography>
                 <Chip
                   label={`${grantedCount} / ${meeting.participants.length} согласны`}
-                  color={allGranted ? 'success' : 'warning'}
-                  size="small"
+                  color={allGranted ? 'success' : 'warning'} size="small"
                 />
               </Stack>
               <Typography color="text.secondary" sx={{ fontSize: 13.5, mb: 2 }}>
-                Согласно ТЗ запись начинается только после согласия всех участников.
-                Бот направил каждому запрос в чат конференции.
+                Запись начнётся только после согласия всех участников.
               </Typography>
-
-              {activeStep >= 1 && !allGranted && (
-                <LinearProgress sx={{ mb: 2, borderRadius: 5, height: 6 }} />
-              )}
 
               <List disablePadding>
                 {meeting.participants.map((p, i) => (
@@ -137,16 +254,28 @@ export default function ConnectPage() {
                     {i > 0 && <Divider component="li" />}
                     <ListItem
                       disableGutters
-                      secondaryAction={<ConsentBadge status={activeStep === 0 ? 'idle' : p.consent} />}
+                      secondaryAction={
+                        <Stack direction="row" spacing={0.5} alignItems="center">
+                          <ConsentBadge status={p.consent} />
+                          {botConnected && p.consent !== 'granted' && (
+                            <Tooltip title="Отметить согласие">
+                              <IconButton size="small" color="success"
+                                onClick={() => run(() => setConsent.mutateAsync({ participantId: p.id, consent: 'granted' as ConsentStatus }))}>
+                                <CheckCircleIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                        </Stack>
+                      }
                     >
                       <ListItemAvatar>
-                        <Avatar sx={{ bgcolor: p.speakerColor, width: 38, height: 38, fontSize: 14 }}>
+                        <Avatar sx={{ bgcolor: p.speaker_color ?? '#999', width: 38, height: 38, fontSize: 14 }}>
                           {initials(p.name)}
                         </Avatar>
                       </ListItemAvatar>
                       <ListItemText
                         primary={p.name}
-                        secondary={`${p.role} · ${p.email}`}
+                        secondary={[p.role, p.email].filter(Boolean).join(' · ')}
                         primaryTypographyProps={{ fontSize: 14.5, fontWeight: 500 }}
                         secondaryTypographyProps={{ fontSize: 12.5 }}
                       />
@@ -155,30 +284,21 @@ export default function ConnectPage() {
                 ))}
               </List>
 
-              {activeStep === 1 && (
-                <Stack direction="row" spacing={1.5} sx={{ mt: 2 }}>
-                  <Button
-                    variant="contained"
-                    onClick={() => { grantAllConsent(); setActiveStep(2); setRecordingState('idle') }}
-                  >
-                    Все согласны (демо)
-                  </Button>
-                  <Button
-                    variant="outlined" color="inherit"
-                    onClick={() => setConsent(meeting.participants[meeting.participants.length - 1].id, 'declined')}
-                  >
-                    Отметить отказ
-                  </Button>
-                </Stack>
+              {botConnected && !allGranted && (
+                <Button
+                  sx={{ mt: 2 }} variant="contained" disabled={grantAll.isPending}
+                  onClick={() => run(() => grantAll.mutateAsync())}
+                >
+                  {grantAll.isPending ? 'Запрос…' : 'Согласие всех участников'}
+                </Button>
               )}
 
               {anyDeclined && (
                 <Alert severity="error" sx={{ mt: 2 }}>
-                  Один из участников отказался от записи. Запись не может быть начата без согласия всех сторон.
+                  Кто-то отказался от записи — запись невозможна без согласия всех.
                 </Alert>
               )}
-
-              {activeStep === 2 && allGranted && (
+              {allGranted && (
                 <Alert severity="success" sx={{ mt: 2 }} icon={<CheckCircleIcon />}>
                   Все участники дали согласие. Можно начинать запись.
                 </Alert>
@@ -186,12 +306,9 @@ export default function ConnectPage() {
             </CardContent>
           </Card>
 
-          {activeStep === 2 && allGranted && (
-            <Button
-              fullWidth variant="contained" color="primary" size="large" sx={{ mt: 2.5 }}
-              startIcon={<VideocamIcon />} onClick={handleStartRecording}
-            >
-              Перейти к записи совещания
+          {allGranted && (
+            <Button fullWidth variant="contained" size="large" sx={{ mt: 2.5 }} startIcon={<VideocamIcon />} onClick={onReady}>
+              Перейти к записи
             </Button>
           )}
         </Grid>
@@ -200,10 +317,9 @@ export default function ConnectPage() {
   )
 }
 
-function ConsentBadge({ status }: { status: 'idle' | 'pending' | 'granted' | 'declined' }) {
-  if (status === 'idle') return <Chip size="small" label="Ожидает подключения" variant="outlined" />
+function ConsentBadge({ status }: { status: ConsentStatus }) {
   if (status === 'pending')
-    return <Chip size="small" icon={<HourglassEmptyIcon />} label="Ожидание ответа" color="warning" variant="outlined" />
+    return <Chip size="small" icon={<HourglassEmptyIcon />} label="Ожидание" color="warning" variant="outlined" />
   if (status === 'granted')
     return <Chip size="small" icon={<CheckCircleIcon />} label="Согласен" color="success" />
   return <Chip size="small" icon={<CancelIcon />} label="Отказ" color="error" />

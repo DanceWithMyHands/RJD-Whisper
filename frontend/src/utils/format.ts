@@ -27,9 +27,9 @@ export function formatDate(iso: string): string {
 }
 
 export function isOverdue(dueDate: string): boolean {
-  // Текущая дата в системе — 2026-06-08
-  const now = new Date('2026-06-08')
-  return new Date(dueDate) < now
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  return new Date(dueDate) < today
 }
 
 export function initials(name: string): string {
