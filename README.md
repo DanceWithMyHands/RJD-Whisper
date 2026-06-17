@@ -1,62 +1,133 @@
-# РЖД · Протокол — система автоматического документирования совещаний
+# РЖД · Протокол
 
-Полный стек: фронтенд (React + MUI), бэкенд (FastAPI), PostgreSQL, MinIO (S3),
-распознавание речи (Whisper через Groq/OpenAI/NIM или stub) и выделение поручений.
+**Система автоматического документирования поручений с совещаний.** Подключается к
+видеоконференции (или принимает загруженный аудиофайл), расшифровывает речь, автоматически
+выделяет поручения с ответственными и сроками, даёт их подтвердить, разослать по почте и
+выгрузить протокол в PDF/JSON.
 
-## Запуск всего одним скриптом (нужен Docker Desktop)
+Полный стек: React + FastAPI + PostgreSQL + MinIO (S3), распознавание речи (Whisper) и
+выделение поручений (LLM) через переключаемые провайдеры. Поднимается одной командой.
 
-Windows (PowerShell):
+> Учебный/демонстрационный стенд. Из коробки работает на встроенных заглушках (без
+> интернета и ключей); реальные Whisper и Qwen подключаются переключением провайдера.
 
+---
+
+## Возможности
+
+- 🎙️ **Распознавание речи** загруженного аудио (популярные форматы) или записи через бота ВКС.
+- 📝 **Автовыделение поручений** из транскрипта: заголовок, описание, ответственный, срок, приоритет.
+- 👥 **Участники только из справочника** — учётки заводит администратор.
+- 🔐 **Роли и разграничение доступа**: admin / manager / deputy / employee.
+- ✅ **Подтверждение и рассылка** поручений ответственным по e-mail.
+- 📄 **Экспорт протокола** в PDF и JSON.
+- 🔌 **Переключаемые провайдеры** ASR/LLM (stub ↔ Groq/OpenAI/self-hosted) без правок кода.
+
+---
+
+## Технологии
+
+**Backend:** Python 3.12 · FastAPI · SQLAlchemy 2.0 (async) + asyncpg · PostgreSQL 15 ·
+Alembic · Pydantic v2 · JWT (PyJWT) + bcrypt · boto3 (S3/MinIO) · aiosmtplib · reportlab · httpx
+
+**Frontend:** TypeScript · React 18 · Vite 5 · Material UI 5 · TanStack Query · axios · react-router
+
+**Инфраструктура:** Docker Compose (PostgreSQL · MinIO · backend · frontend через nginx)
+
+---
+
+## Быстрый старт
+
+Нужен установленный и запущенный **Docker Desktop**.
+
+**Windows (PowerShell):**
 ```powershell
-.\start.ps1            # собрать и запустить весь стек
-.\start.ps1 -Fresh     # пересоздать БД с нуля (свежие демо-данные и роли)
+.\start.ps1 -Fresh     # первый запуск: пересоздать БД, засеять демо-данные и роли
+.\start.ps1            # обычный запуск
 .\start.ps1 -Down      # остановить
 ```
 
-Linux / macOS:
-
+**Linux / macOS:**
 ```bash
-./start.sh             # собрать и запустить
-./start.sh --fresh     # пересоздать БД с нуля
-./start.sh --down      # остановить
+./start.sh --fresh
+./start.sh
+./start.sh --down
 ```
 
 Или напрямую: `docker compose up --build`.
 
 После старта:
-- Приложение:    http://localhost:5173
-- API (Swagger): http://localhost:8000/docs
-- MinIO консоль: http://localhost:9001  (minioadmin / minioadmin)
+- **Приложение:** http://localhost:5173
+- **API (Swagger):** http://localhost:8000/docs
+- **MinIO консоль:** http://localhost:9001 (minioadmin / minioadmin)
 
-## Демо-вход
+## Демо-учётки
 
-| Роль | Email | Пароль |
-|------|-------|--------|
-| Администратор (рут) | admin@rzd.ru | admin12345 |
-| Начальник (manager) | a.sokolov@rzd.ru | manager123 |
-| Заместитель (deputy) | e.miheeva@rzd.ru | deputy123 |
-| Сотрудник | v.gromov@rzd.ru | employee123 |
-| Сотрудник | o.zaytseva@rzd.ru | employee123 |
+| Роль | E-mail | Пароль | Что может |
+|------|--------|--------|-----------|
+| Администратор | `admin@rzd.ru` | `admin12345` | всё + управление пользователями |
+| Начальник | `a.sokolov@rzd.ru` | `manager123` | совещания, поручения, рассылка |
+| Заместитель | `e.miheeva@rzd.ru` | `deputy123` | как начальник |
+| Сотрудник | `v.gromov@rzd.ru` | `employee123` | только свои совещания и поручения |
+| Сотрудник | `o.zaytseva@rzd.ru` | `employee123` | только свои совещания и поручения |
 
-## Распознавание аудио
+> Пароли демонстрационные — для учебного стенда. В продакшене заменить.
 
-По умолчанию работает stub (демо-транскрипт). Для реального распознавания загруженных
-файлов получите бесплатный ключ Groq (console.groq.com) и в .env укажите:
+---
 
-```
+## Реальное распознавание и ИИ-выделение поручений
+
+По умолчанию работают встроенные заглушки. Чтобы включить реальные Whisper + Qwen3 через
+[Groq](https://console.groq.com) (есть бесплатный ключ), создайте `.env` в корне (за основу —
+`.env.example`) и укажите:
+
+```env
 ASR_PROVIDER=openai_compatible
-ASR_API_KEY=gsk_...
+ASR_API_KEY=gsk_ваш_ключ
+ASR_MODEL=whisper-large-v3
+
+LLM_PROVIDER=openai_compatible
+LLM_API_KEY=gsk_ваш_ключ
+LLM_MODEL=qwen/qwen3-32b
 ```
 
-Подробнее о провайдерах, прод-развёртывании ASR на серверах РЖД и концепции бота ВКС —
-в docs/INTEGRATIONS.md.
+Перезапустите `.\start.ps1`. Тот же ключ Groq обслуживает и ASR, и LLM. `.env` —
+в `.gitignore`, секреты в репозиторий не попадают.
 
-## Структура
+Провайдеры, прод-развёртывание ASR на серверах РЖД и концепция бота ВКС — в
+[`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md).
+
+---
+
+## Структура проекта
 
 ```
-backend/   FastAPI + PostgreSQL + Alembic + провайдеры ASR/LLM/bot
-frontend/  React + TypeScript + MUI (собирается в nginx-образ)
-docs/      документация по интеграциям
-docker-compose.yml   весь стек одной командой
-start.ps1 / start.sh единый запуск
+backend/    FastAPI + PostgreSQL + Alembic + провайдеры ASR/LLM/bot
+frontend/   React + TypeScript + MUI (собирается в nginx-образ)
+docs/       SYSTEM.md (описание системы), INTEGRATIONS.md (провайдеры/прод)
+docker-compose.yml      весь стек одной командой
+start.ps1 / start.sh    единый запуск
 ```
+
+Полное техническое описание и руководство — [`docs/SYSTEM.md`](docs/SYSTEM.md).
+
+---
+
+## Тесты
+
+```bash
+cd backend
+python -m tests.smoke_test     # сквозной сценарий на SQLite (Postgres/MinIO не нужны)
+```
+
+---
+
+## Статус и ограничения
+
+Из коробки полностью функционально на заглушках. Не доделано/смоделировано:
+
+- Реальная запись из ВКС (Cisco Jabber / Yandex Telemost) — смоделирована.
+- Удаление совещаний и пользователей через API/UI (удаление поручений есть).
+- Рассылка писем требует настроенного SMTP (`SMTP_*` в `.env`); иначе только журналируется.
+- Сквозной прогон реального аудио → ИИ-поручения через Groq не верифицирован вживую
+  (провайдер подключён, при сбое деградирует к эвристике).
